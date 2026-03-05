@@ -3,7 +3,7 @@ use std::thread;
 use std::sync::mpsc::Sender;
 use crate::hw_enum;
 
-use windows::Win32::Foundation::{FVE_E_INVALID_NBP_CERT, VARIANT_FALSE};
+use windows::Win32::Foundation::{VARIANT_FALSE, VARIANT_TRUE};
 use windows::Win32::UI::Shell::SHCreateStreamOnFileEx;
 use windows::Win32::Storage::Imapi::*;
 use windows::core::{BSTR, ComInterface, HRESULT, HSTRING, Error, Result, implement};
@@ -134,6 +134,9 @@ fn burn_logic(file_list: Vec<String>, vl: String, drive_id: String, tx: &Sender<
 
         fs_image.SetVolumeName(&BSTR::from(vl))?;
         fs_image.SetFileSystemsToCreate(file_sytems)?;
+        // Tell the file system image how much space is available on the media
+        let free_sectors = disc_format.FreeSectorsOnMedia()?;
+        fs_image.SetFreeMediaBlocks(free_sectors as i32)?;
         let root: IFsiDirectoryItem = fs_image.Root()?;
 
         let _ = tx.send(BurnEvent::Log(format!("Adding files to image")));
@@ -144,8 +147,10 @@ fn burn_logic(file_list: Vec<String>, vl: String, drive_id: String, tx: &Sender<
                 continue;
             }
             if path.is_dir() {
-                let dir_path = BSTR::from(path.to_string_lossy().to_string());
-                root.AddDirectory(&dir_path)?;
+                let source_path = BSTR::from(path.to_string_lossy().to_string());
+                // AddTree copies directory contents from file system into the image
+                // VARIANT_TRUE = include the base directory itself in the image
+                root.AddTree(&source_path, VARIANT_TRUE)?;
                 continue;
             }
             let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -156,12 +161,11 @@ fn burn_logic(file_list: Vec<String>, vl: String, drive_id: String, tx: &Sender<
         let _ = tx.send(BurnEvent::Log(format!("Creating image stream")));
         let result_image = fs_image.CreateResultImage()?;
         let image_stream = result_image.ImageStream()?;
-        let disc_capacity = disc_format.FreeSectorsOnMedia()?;
-        if disc_capacity < result_image.BlockSize()?{
+        if free_sectors < result_image.BlockSize()?{
             let _= tx.send(BurnEvent::Error(format!("Burn job size exceeds disc capacity")));
             return Err(Error::from(HRESULT(0xC0AA0404u32 as i32)));
         }
-        if finalize {disc_format.ForceMediaToBeClosed();}
+        if finalize {disc_format.ForceMediaToBeClosed()?;}
         let _ = tx.send(BurnEvent::Log(format!("Beginning Write")));
         let write_result = disc_format.Write(&image_stream);
         let _ = connection_point.Unadvise(cookie);
