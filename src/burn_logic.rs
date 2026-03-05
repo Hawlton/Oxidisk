@@ -1,8 +1,9 @@
 use std::path::Path;
 use std::thread;
 use std::sync::mpsc::Sender;
+use crate::hw_enum;
 
-use windows::Win32::Foundation::VARIANT_FALSE;
+use windows::Win32::Foundation::{FVE_E_INVALID_NBP_CERT, VARIANT_FALSE};
 use windows::Win32::UI::Shell::SHCreateStreamOnFileEx;
 use windows::Win32::Storage::Imapi::*;
 use windows::core::{BSTR, ComInterface, HRESULT, HSTRING, Error, Result, implement};
@@ -57,7 +58,7 @@ impl DDiscFormat2DataEvents_Impl for ComSink {
     }
 }
 
-pub fn spawn_burn_thread(file_list: &[String], vl: &str, drive: &str, tx: Sender<BurnEvent>) {
+pub fn spawn_burn_thread(file_list: &[String], vl: &str, drive: &str, tx: Sender<BurnEvent>, finalize: bool) {
     let owned_files = file_list.to_vec();
     let owned_label = vl.to_string();
     let owned_drive = drive.to_string();
@@ -68,16 +69,19 @@ pub fn spawn_burn_thread(file_list: &[String], vl: &str, drive: &str, tx: Sender
                 return;
             }
         }
-        match burn_logic(owned_files, owned_label, owned_drive, &tx) {
+        match burn_logic(owned_files, owned_label, owned_drive, &tx, finalize) {
             Ok(_) => {let _ = tx.send(BurnEvent::Finished);}
-            Err(e) => {let _ = tx.send(BurnEvent::Error(format!("Burn Failed: 0x{:08X}", e.code().0)));}
+            Err(e) => {
+                let _ = tx.send(BurnEvent::Error(format!("Burn Failed: 0x{:08X}", e.code().0)));
+                let _ = tx.send(BurnEvent::Error(format!("Press 'esc' to return to Main Menu")));
+            }
         }
     });
 }
 
-fn burn_logic(file_list: Vec<String>, vl: String, drive_id: String, tx: &Sender<BurnEvent>) -> Result<()> {
+fn burn_logic(file_list: Vec<String>, vl: String, drive_id: String, tx: &Sender<BurnEvent>, finalize: bool) -> Result<()> {
     unsafe {
-        let disc_master: IDiscMaster2 = CoCreateInstance(&MsftDiscMaster2, None, CLSCTX_ALL)?;
+        //let disc_master: IDiscMaster2 = CoCreateInstance(&MsftDiscMaster2, None, CLSCTX_ALL)?;
         let unique_id = &BSTR::from(drive_id);
         let disc_recorder: IDiscRecorder2 = CoCreateInstance(&MsftDiscRecorder2, None, CLSCTX_ALL)?;
         let disc_format: IDiscFormat2Data = CoCreateInstance(&MsftDiscFormat2Data, None, CLSCTX_ALL)?;
@@ -114,7 +118,7 @@ fn burn_logic(file_list: Vec<String>, vl: String, drive_id: String, tx: &Sender<
 
         let _ = tx.send(BurnEvent::Log(format!("Creating File System")));
         let media_type = disc_format.CurrentPhysicalMediaType()?;
-        let _ = tx.send(BurnEvent::Log(format!("Current Media type: {:?}", media_type)));
+        let _ = tx.send(BurnEvent::Log(format!("Current Media type: {:?}", hw_enum::DriveInfo::get_media_type(media_type))));
         let fs_image: IFileSystemImage = CoCreateInstance(&MsftFileSystemImage, None, CLSCTX_ALL)?;
         let _ = tx.send(BurnEvent::Log(format!("Created FS Image")));
         let file_sytems = match media_type {
@@ -122,22 +126,23 @@ fn burn_logic(file_list: Vec<String>, vl: String, drive_id: String, tx: &Sender<
 
             IMAPI_MEDIA_TYPE_DVDRAM | IMAPI_MEDIA_TYPE_DVDPLUSR | IMAPI_MEDIA_TYPE_DVDPLUSRW |
             IMAPI_MEDIA_TYPE_DVDPLUSR_DUALLAYER | IMAPI_MEDIA_TYPE_DVDDASHR | IMAPI_MEDIA_TYPE_DVDDASHRW |
-            IMAPI_MEDIA_TYPE_DVDDASHR_DUALLAYER => {FsiFileSystems(FsiFileSystemJoliet.0 | FsiFileSystemUDF.0)}
+            IMAPI_MEDIA_TYPE_DVDDASHR_DUALLAYER => {FsiFileSystemUDF}
 
             IMAPI_MEDIA_TYPE_BDR | IMAPI_MEDIA_TYPE_BDRE => {FsiFileSystemUDF}
             _ => FsiFileSystemUDF
         };
 
         fs_image.SetVolumeName(&BSTR::from(vl))?;
-        let _ = tx.send(BurnEvent::Log(format!("Volume Name Set")));
         fs_image.SetFileSystemsToCreate(file_sytems)?;
-        let _ = tx.send(BurnEvent::Log(format!("File system set")));
         let root: IFsiDirectoryItem = fs_image.Root()?;
-        let _ = tx.send(BurnEvent::Log(format!("FS ROOT Created")));
 
         let _ = tx.send(BurnEvent::Log(format!("Adding files to image")));
         for file in &file_list {
             let path = Path::new(file);
+            if !Path::exists(path) {
+                let _ = tx.send(BurnEvent::Log(format!("Path: {} does not exist. Skipping", file)));
+                continue;
+            }
             if path.is_dir() {
                 let dir_path = BSTR::from(path.to_string_lossy().to_string());
                 root.AddDirectory(&dir_path)?;
@@ -156,7 +161,7 @@ fn burn_logic(file_list: Vec<String>, vl: String, drive_id: String, tx: &Sender<
             let _= tx.send(BurnEvent::Error(format!("Burn job size exceeds disc capacity")));
             return Err(Error::from(HRESULT(0xC0AA0404u32 as i32)));
         }
-
+        if finalize {disc_format.ForceMediaToBeClosed();}
         let _ = tx.send(BurnEvent::Log(format!("Beginning Write")));
         let write_result = disc_format.Write(&image_stream);
         let _ = connection_point.Unadvise(cookie);

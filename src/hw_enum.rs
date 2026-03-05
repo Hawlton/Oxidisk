@@ -26,7 +26,7 @@ impl DriveInfo{
         }
     }
 
-    fn get_media_type(media_num: IMAPI_MEDIA_PHYSICAL_TYPE) -> String {
+    pub fn get_media_type(media_num: IMAPI_MEDIA_PHYSICAL_TYPE) -> String {
         match media_num {
             IMAPI_MEDIA_TYPE_UNKNOWN => "Unknown".to_string(),
             IMAPI_MEDIA_TYPE_CDROM => "CDROM".to_string(),
@@ -49,6 +49,7 @@ impl DriveInfo{
     fn human_readable(bytes: u128 ) -> String{
         const SUFFIXES: &[&str] = &["B", "KB", "MB", "GB"];
         let mut i = 0;
+        //buffer overflow waiting to happen...TOO BAD
         let mut double_bytes: f64 = bytes as f64;
         while double_bytes > 1024 as f64 && i != SUFFIXES.len() {
             double_bytes /= 1024.0;
@@ -96,8 +97,7 @@ pub fn list_drives() -> Result<Vec<DriveInfo>> {
                 new_drive.capacity_readble = Some(DriveInfo::human_readable(drive_cap));
                 drive_list.push(new_drive);
             }
-        } // disc_master, recorder, format all dropped here
-        
+        } 
         CoUninitialize();
     }
     Ok(drive_list)

@@ -131,13 +131,13 @@ fn main() -> Result<(), Box<dyn Error>>{
                                             app.logs.clear();
                                             //handle None state more gracefully later
                                             //this is bad
-                                            let Some(index) = app.drive_state.selected() else {break};
+                                            let Some(index) = app.drive_state.selected() else {continue};
                                             let drive_id = &app.drives[index].id;
-                                            spawn_burn_thread(&app.files, &app.volume_label, &drive_id, tx);
+                                            spawn_burn_thread(&app.files, &app.volume_label, &drive_id, tx, app.finalize);
                                         }
                                         _ => {}
                                     }
-                                    if command.contains("setvl") && command.len() > 5 {app.volume_label = command[5..].to_string();}
+                                    if command.contains("setvl") && command.len() > 5 {app.volume_label = command[6..].to_string();}
                                     if command.contains("setspeed") && command.len() > 8 {
                                         app.burn_speed = format!("{}x", command.chars().nth(9).expect("Please enter a number after the command"));
                                     }

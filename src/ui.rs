@@ -204,10 +204,7 @@ impl App{
                         self.reciever = Some(rx);
                         let Some(drive_index) = self.drive_state.selected() else {return;};
                         let drive_id = &self.drives[drive_index].id;
-                        spawn_burn_thread(&self.files,
-                            &self.volume_label, 
-                            drive_id, 
-                            tx);
+                        spawn_burn_thread(&self.files,&self.volume_label, drive_id, tx, self.finalize);
                     }
                     _ => {}
                 }
@@ -238,15 +235,35 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 }
 
 pub fn draw_init(f: &mut Frame){
-    let sections = Layout::default().direction(Direction::Vertical).constraints([Constraint::Max(1), Constraint::Max(1)]).split(f.area());
+    // Vertical centering
+    let [_, center_row, _] = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(2),
+        Constraint::Fill(1),
+    ]).areas(f.area());
 
-    let loading_text = Paragraph::new("Loading...").style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)).alignment(Alignment::Center);
-    f.render_widget(loading_text, sections[0]);
-    
-    //align this to center somehow
-    let throbber = Throbber::default().style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)).throbber_set(BRAILLE_SIX_DOUBLE);
-    f.render_widget(throbber, sections[0]);
+    // Split into text line + throbber line
+    let [text_area, throbber_row] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ]).areas(center_row);
 
+    // Horizontal centering for throbber
+    let [_, throbber_area, _] = Layout::horizontal([
+        Constraint::Fill(1),
+        Constraint::Length(2),
+        Constraint::Fill(1),
+    ]).areas(throbber_row);
+
+    let loading_text = Paragraph::new("Loading...")
+        .style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+        .alignment(Alignment::Center);
+    f.render_widget(loading_text, text_area);
+
+    let throbber = Throbber::default()
+        .style(Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+        .throbber_set(BRAILLE_SIX_DOUBLE);
+    f.render_widget(throbber, throbber_area);
 }
 
 pub fn draw_help(f: &mut Frame) {
@@ -282,7 +299,7 @@ pub fn draw_help(f: &mut Frame) {
 }
 
 pub fn draw_burn(f: &mut Frame, app: &mut App){
-    let rows = Layout::default().direction(Direction::Vertical).constraints([Constraint::Min(1), Constraint::Min(1)]).split(f.area());
+    let rows = Layout::default().direction(Direction::Vertical).constraints([Constraint::Min(1), Constraint::Max(5)]).split(f.area());
 
     //log box
     let log_items: Vec<ListItem> = app.logs.iter().map(|f| ListItem::new(f.as_str())).collect();
@@ -309,7 +326,7 @@ pub fn draw_dashboard(f: &mut Frame, app: &mut App) {
     f.render_widget(title, rows[0]);
 
     //drive box 
-    let drive_items: Vec<ListItem> = app.drives.iter().map(|d| {let label = format!("Drive Name: {} ", d.media_label); ListItem::new(label)}).collect();
+    let drive_items: Vec<ListItem> = app.drives.iter().map(|d| {let label = format!("{} {} ", d.media_label, d.media_type.as_deref().unwrap_or("Unknown")); ListItem::new(label)}).collect();
     let drive_list = List::new(drive_items).style(Style::default().fg(app.set_color(app.current_menu, CurrentMenu::Media))).block(Block::default().borders(Borders::ALL).title("Drives"))
         .highlight_style(app.get_highlight_style(CurrentMenu::Media));
 
